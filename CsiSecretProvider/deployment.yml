@@ -1,0 +1,100 @@
+﻿apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi-driver-test
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: csi-driver-test
+  template:
+    metadata:
+      labels:
+        app: csi-driver-test
+    spec:
+      containers:
+        - name: sidecar
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+          image: zetanova/grpc-poxy:1.0.1
+          volumeMounts:
+            - name: socketdir
+              mountPath: /tmp/socketdir
+            - name: providervol
+              mountPath: /tmp/providerdir
+          env:
+            - name: BIND_TO
+              value: unix:///tmp/providerdir/jitesoft.sock
+            - name: PROXY_TO
+              value: unix:///tmp/socketdir/jitesoft.sock
+        - name: driver
+          image: test-csi
+          imagePullPolicy: Never
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            privileged: true
+          volumeMounts:
+            - name: socketdir
+              mountPath: "/provider"
+      volumes:
+        - name: socketdir
+          emptyDir: {}
+        - name: providervol
+          hostPath:
+            path: "/etc/kubernetes/secrets-store-csi-providers"
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: test
+  namespace: default
+spec:
+  provider: jitesoft
+  parameters:
+    someVar: "test"
+    someOtherVar: "123123"
+    someOtherVarAgain: "true"
+    objects: |
+      - key: "some-test"
+        objectName: "test"
+        type: "Secret"
+      - key: "some-cert"
+        objectName: "test-cert.pem"
+        type: "certificate"
+        format: "pem"
+      - key: "another-cert"
+        publicKey: "another.crt"
+        privateKey: "another-key.key"
+        format: "pem"
+        type: "certificate"
+  secretObjects:
+    - data:
+        - key: test
+          objectName: test
+      secretName: test-secret
+      type: Opaque
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test
+  namespace: default
+spec:
+  containers:
+    - name: busybox
+      image: busybox
+      command: ["/bin/sh", "-ec", "sleep 1000"]
+      volumeMounts:
+        - mountPath: /mnt/secret-store
+          name: inline-secret
+  volumes:
+    - name: inline-secret
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: "test"
